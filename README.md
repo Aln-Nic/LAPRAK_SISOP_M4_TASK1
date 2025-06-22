@@ -85,4 +85,494 @@ Dengan sistem ini, kedua mahasiswa akhirnya bisa belajar dengan tenang. Yuadi bi
 - Ingat untuk menggunakan argument `-o allow_other` saat mounting FUSE file system Anda agar user lain dapat mengaksesnya.
 - Fokus pada implementasi operasi FUSE yang berkaitan dengan **membaca** dan **menolak** operasi write/modify. Anda perlu memeriksa **UID** dari user yang mengakses di dalam operasi FUSE Anda untuk menerapkan pembatasan private folder.
 
+# FUSecure.c
+```
+#define FUSE_USE_VERSION 31
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <fuse.h>
+#include <fuse/fuse.h>
+#include <linux/limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static const char *source_path = "/home/shared_files";
+
+void mkdir_mountpoint(const char *path) {
+  struct stat st = {0};
+  if (stat(path, &st) == -1) {
+    mkdir(path, 0755);
+  }
+}
+
+static int checkAccessPerm(const char *path, uid_t uid, gid_t gid) {
+  char fullPath[PATH_MAX];
+  struct stat st;
+
+  snprintf(fullPath, sizeof(fullPath), "%s%s", source_path, path);
+  if (lstat(fullPath, &st) == -1)
+    return -errno;
+
+  if (strncmp(path, "/private_yuadi/", 14) == 0 ||
+      strcmp(path, "/private_yuadi") == 0) {
+    if (uid != 1001)
+      return -EACCES;
+  }
+
+  if (strncmp(path, "/private_irwandi/", 16) == 0 ||
+      strcmp(path, "/private_irwandi") == 0) {
+    if (uid != 1002)
+      return -EACCES;
+  }
+
+  return 0;
+}
+
+static int xmp_getattr(const char *path, struct stat *stbuf) {
+  int res;
+  char fpath[PATH_MAX];
+
+  sprintf(fpath, "%s%s", source_path, path);
+
+  res = lstat(fpath, stbuf);
+
+  if (res == -1)
+    return -errno;
+
+  return 0;
+}
+
+static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                       off_t offset, struct fuse_file_info *fi) {
+  char fpath[PATH_MAX];
+
+  if (strcmp(path, "/") == 0) {
+    path = source_path;
+    sprintf(fpath, "%s", path);
+  } else {
+    sprintf(fpath, "%s%s", source_path, path);
+  }
+
+  int res = 0;
+
+  DIR *dp;
+  struct dirent *de;
+  (void)offset;
+  (void)fi;
+
+  dp = opendir(fpath);
+
+  if (dp == NULL)
+    return -errno;
+
+  while ((de = readdir(dp)) != NULL) {
+    char childPath[PATH_MAX];
+
+    snprintf(childPath, sizeof(childPath), "%s%s", path, de->d_name);
+
+    /* if (checkAccessPerm(childPath, fuse_get_context()->uid, */
+    /*                     fuse_get_context()->gid) != 0) */
+    /*   continue; */
+
+    struct stat st;
+
+    memset(&st, 0, sizeof(st));
+
+    st.st_ino = de->d_ino;
+    st.st_mode = de->d_type << 12;
+    res = (filler(buf, de->d_name, &st, 0));
+
+    if (res != 0)
+      break;
+  }
+
+  closedir(dp);
+
+  return 0;
+}
+
+static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
+                    struct fuse_file_info *fi) {
+  char fpath[PATH_MAX];
+  if (strcmp(path, "/") == 0) {
+    path = source_path;
+
+    sprintf(fpath, "%s", path);
+  } else {
+    sprintf(fpath, "%s%s", source_path, path);
+
+    int accessGrant =
+        checkAccessPerm(path, fuse_get_context()->uid, fuse_get_context()->gid);
+    if (accessGrant != 0)
+      return accessGrant;
+  }
+
+  int res = 0;
+  int fd = 0;
+
+  (void)fi;
+
+  fd = open(fpath, O_RDONLY);
+
+  if (fd == -1)
+    return -errno;
+
+  res = pread(fd, buf, size, offset);
+
+  if (res == -1)
+    res = -errno;
+
+  close(fd);
+
+  return res;
+}
+
+static int xmp_open(const char *path, struct fuse_file_info *fi) {
+  char fullPath[PATH_MAX];
+
+  snprintf(fullPath, sizeof(fullPath), "%s%s", source_path, path);
+
+  if ((fi->flags & O_ACCMODE) != O_RDONLY)
+    return -EACCES;
+
+  int accessGrant =
+      checkAccessPerm(path, fuse_get_context()->uid, fuse_get_context()->gid);
+  if (accessGrant != 0)
+    return accessGrant;
+
+  int res = open(fullPath, fi->flags);
+  if (res == -1)
+    return -errno;
+
+  close(res);
+  return 0;
+}
+
+static int xmp_write(const char *path, const char *buf, size_t size,
+                     off_t offset, struct fuse_file_info *fi) {
+  return -EACCES;
+}
+
+static int xmp_create(const char *path, mode_t mode,
+                      struct fuse_file_info *fi) {
+  return -EACCES;
+}
+
+static int xmp_unlink(const char *path) { return -EACCES; }
+
+static int xmp_mkdir(const char *path, mode_t mode) { return -EACCES; }
+
+static int xmp_rmdir(const char *path) { return -EACCES; }
+
+static int xmp_rename(const char *from, const char *to) { return -EACCES; }
+
+static int xmp_truncate(const char *path, off_t size) { return -EACCES; }
+
+static int xmp_utimens(const char *path, const struct timespec ts[2]) {
+  return -EACCES;
+}
+
+static int xmp_chmod(const char *path, mode_t mode) { return -EACCES; }
+
+static int xmp_chown(const char *path, uid_t uid, gid_t gid) { return -EACCES; }
+
+static struct fuse_operations xmp_oper = {
+    .getattr = xmp_getattr,
+    .readdir = xmp_readdir,
+    .read = xmp_read,
+    .open = xmp_open,
+    .write = xmp_write,
+    .create = xmp_create,
+    .unlink = xmp_unlink,
+    .mkdir = xmp_mkdir,
+    .rmdir = xmp_rmdir,
+    .rename = xmp_rename,
+    .truncate = xmp_truncate,
+    .utimens = xmp_utimens,
+    .chmod = xmp_chmod,
+    .chown = xmp_chown,
+};
+
+int main(int argc, char *argv[]) {
+  umask(0);
+
+  if (argc < 2) {
+    fprintf(stderr, "Usage: %s <mountpoint> [options]\n", argv[0]);
+    return 1;
+}
+
+
+  return fuse_main(argc, argv, &xmp_oper, NULL);
+}
+```
+### 1.`Library`
+```
+#define FUSE_USE_VERSION 31
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <fuse.h>
+#include <fuse/fuse.h>
+#include <linux/limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static const char *source_path = "/home/shared_files"; 
+```
+Direktif `#define FUSE_USE_VERSION 31` digunakan untuk menetapkan versi API FUSE yang digunakan. Header `fuse.h` dan `fuse/fuse.h` menyediakan fungsi dan struktur utama dari FUSE. Library `dirent.h` digunakan untuk membaca isi direktori, sedangkan `errno.h` dan `fcntl.h` menyediakan kode kesalahan dan kontrol akses file. Header `stdio.h`, `stdlib.h`, dan `string.h` mendukung operasi dasar seperti input/output, alokasi memori, dan manipulasi string.
+
+Selain itu, `sys/stat.h` digunakan untuk memperoleh atribut file seperti ukuran dan izin akses, sedangkan `sys/time.h` mendukung pengaturan waktu pada file. Header `sys/types.h` menyediakan tipe data sistem seperti `uid_t` dan `mode_t`, dan `unistd.h` menyertakan fungsi sistem penting seperti `read()`, `write()`, dan `getuid()`. Terakhir, `linux/limits.h` digunakan untuk mendefinisikan batasan sistem seperti panjang maksimal path (`PATH_MAX`). Seluruh header ini saling mendukung untuk membangun sistem file `read-only` dengan kontrol akses berbasis UID.
+
+`static const char *source_path = "/home/shared_files"` mendefinisikan sebuah variabel pointer ke string yang menyimpan path direktori sumber dari file system FUSE. Artinya, seluruh isi file system virtual akan diambil dari direktori asli `/home/shared_files`. Kata kunci `static` membatasi visibilitas variabel hanya dalam file ini, dan `const` menunjukkan bahwa nilai path tidak boleh diubah selama program berjalan.
+
+### 2.`mkdir_mountpoint`
+```
+void mkdir_mountpoint(const char *path) {
+  struct stat st = {0};
+  if (stat(path, &st) == -1) {
+    mkdir(path, 0755);
+  }
+}
+```
+Fungsi `mkdir_mountpoint(const char *path)` bertujuan untuk memastikan bahwa direktori mount point sudah tersedia sebelum proses mounting dilakukan. Fungsi ini bekerja dengan memeriksa keberadaan direktori menggunakan `stat()`. Jika direktori yang dimaksud belum ada ,ditandai dengan stat gagal mengakses direktori tersebut, maka fungsi akan membuatnya menggunakan `mkdir()` dengan hak akses `0755`, yang memberikan izin baca, tulis, dan eksekusi untuk pemilik, serta izin baca dan eksekusi untuk grup dan pengguna lain. Meskipun fungsi ini tidak dipanggil dalam fungsi utama `main()`, ia dapat berguna pada tahap pengembangan awal untuk memastikan mount point tersedia.
+
+###   3.`checkAccessPerm`
+```
+   - `static int checkAccessPerm(const char *path, uid_t uid, gid_t gid) {
+  char fullPath[PATH_MAX];
+  struct stat st;
+  snprintf(fullPath, sizeof(fullPath), "%s%s", source_path, path);
+  if (lstat(fullPath, &st) == -1)
+    return -errno;
+  if (strncmp(path, "/private_yuadi/", 14) == 0 ||
+      strcmp(path, "/private_yuadi") == 0) {
+    if (uid != 1001)
+      return -EACCES;
+  }
+  if (strncmp(path, "/private_irwandi/", 16) == 0 ||
+      strcmp(path, "/private_irwandi") == 0) {
+    if (uid != 1002)
+      return -EACCES;
+  }
+  return 0;`
+}`
+```
+Fungsi `checkAccessPerm(const char *path, uid_t uid, gid_t gid)` digunakan untuk memverifikasi apakah pengguna yang sedang mengakses direktori memiliki hak akses sesuai kebijakan yang telah ditentukan. Fungsi ini pertama-tama membentuk path lengkap menuju file atau direktori dengan menggabungkan source_path dan path dari argumen. Kemudian dilakukan pengecekan keberadaan file atau direktori menggunakan `lstat()`. Jika direktori yang dimaksud merupakan `/private_yuadi` (baik secara langsung maupun subdirektorinya), maka hanya pengguna dengan `UID 1001` yang diperbolehkan mengaksesnya. Hal serupa berlaku untuk `/private_irwandi`, di mana hanya `UID 1002` yang diizinkan. Apabila UID pengguna tidak sesuai, maka fungsi akan mengembalikan nilai `-EACCES` sebagai penanda akses ditolak.
+
+### 4.`xmp_getattr`
+```
+static int xmp_getattr(const char *path, struct stat *stbuf) {
+  int res;
+  char fpath[PATH_MAX];
+
+  sprintf(fpath, "%s%s", source_path, path);
+
+  res = lstat(fpath, stbuf);
+
+  if (res == -1)
+    return -errno;
+
+  return 0;
+}
+```
+Fungsi `xmp_getattr(const char *path, struct stat *stbuf)` bertanggung jawab dalam mengisi metadata dari file atau direktori, seperti ukuran, jenis file, dan hak akses. Fungsi ini akan membentuk path absolut ke direktori sumber dengan menggabungkan `source_path` dan `path` yang diterima. Setelah itu, fungsi menggunakan `lstat()` untuk mengisi struktur `stat` yang disediakan oleh sistem, dan apabila terjadi kesalahan, akan mengembalikan nilai negatif dari `errno`.
+
+### 5.`xmp_readdir`
+```
+static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                       off_t offset, struct fuse_file_info *fi) {
+  char fpath[PATH_MAX];
+
+  if (strcmp(path, "/") == 0) {
+    path = source_path;
+    sprintf(fpath, "%s", path);
+  } else {
+    sprintf(fpath, "%s%s", source_path, path);
+  }
+
+  int res = 0;
+
+  DIR *dp;
+  struct dirent *de;
+  (void)offset;
+  (void)fi;
+
+  dp = opendir(fpath);
+
+  if (dp == NULL)
+    return -errno;
+
+  while ((de = readdir(dp)) != NULL) {
+    char childPath[PATH_MAX];
+
+    snprintf(childPath, sizeof(childPath), "%s%s", path, de->d_name);
+
+    /* if (checkAccessPerm(childPath, fuse_get_context()->uid, */
+    /*                     fuse_get_context()->gid) != 0) */
+    /*   continue; */
+
+    struct stat st;
+
+    memset(&st, 0, sizeof(st));
+
+    st.st_ino = de->d_ino;
+    st.st_mode = de->d_type << 12;
+    res = (filler(buf, de->d_name, &st, 0));
+
+    if (res != 0)
+      break;
+  }
+
+  closedir(dp);
+
+  return 0;
+}
+```
+Fungsi `xmp_readdir(...)` digunakan untuk menampilkan daftar isi suatu direktori. Fungsi ini pertama-tama menentukan path absolut berdasarkan path yang diterima, kemudian membuka direktori tersebut menggunakan `opendir()`. Setelah direktori berhasil dibuka, fungsi akan melakukan iterasi terhadap setiap entri di dalamnya menggunakan `readdir()`. Untuk setiap entri, informasi seperti inode dan tipe file dikumpulkan ke dalam struktur `stat`, lalu dikirim ke kernel melalui fungsi `filler()`. Terdapat bagian komentar dalam kode ini yang memungkinkan filter tambahan untuk menyembunyikan file atau direktori berdasarkan `UID`, meskipun secara default tidak diaktifkan.
+
+### 6.`xmp_read`
+```
+static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
+                    struct fuse_file_info *fi) {
+  char fpath[PATH_MAX];
+  if (strcmp(path, "/") == 0) {
+    path = source_path;
+
+    sprintf(fpath, "%s", path);
+  } else {
+    sprintf(fpath, "%s%s", source_path, path);
+
+    int accessGrant =
+        checkAccessPerm(path, fuse_get_context()->uid, fuse_get_context()->gid);
+    if (accessGrant != 0)
+      return accessGrant;
+  }
+
+  int res = 0;
+  int fd = 0;
+
+  (void)fi;
+
+  fd = open(fpath, O_RDONLY);
+
+  if (fd == -1)
+    return -errno;
+
+  res = pread(fd, buf, size, offset);
+
+  if (res == -1)
+    res = -errno;
+
+  close(fd);
+
+  return res;
+}
+```
+Fungsi `xmp_read(...)` bertugas membaca isi file dari lokasi tertentu di dalam file system virtual. Proses dimulai dengan membentuk path lengkap file. Jika file berada di luar root (`/`), maka fungsi akan memanggil `checkAccessPerm()` untuk memastikan pengguna memiliki hak akses. Apabila akses diberikan, file akan dibuka dalam mode baca `(O_RDONLY)` dan isi file akan dibaca dari offset tertentu menggunakan `pread()`, sehingga tidak mengubah posisi file pointer. Setelah pembacaan selesai, file ditutup dan hasil pembacaan dikembalikan ke kernel.
+
+### 7.`xmp_open`
+```
+static int xmp_open(const char *path, struct fuse_file_info *fi) {
+  char fullPath[PATH_MAX];
+
+  snprintf(fullPath, sizeof(fullPath), "%s%s", source_path, path);
+
+  if ((fi->flags & O_ACCMODE) != O_RDONLY)
+    return -EACCES;
+
+  int accessGrant =
+      checkAccessPerm(path, fuse_get_context()->uid, fuse_get_context()->gid);
+  if (accessGrant != 0)
+    return accessGrant;
+
+  int res = open(fullPath, fi->flags);
+  if (res == -1)
+    return -errno;
+
+  close(res);
+  return 0;
+}
+```
+Fungsi `xmp_open(...)` merupakan fungsi validasi akses ketika sebuah file hendak dibuka. Fungsi ini akan menolak permintaan jika file tidak dibuka dalam mode baca saja (misalnya mode tulis atau tulis-baca). Selain itu, fungsi akan memanggil `checkAccessPerm()` untuk memastikan UID pengguna sesuai dengan kebijakan akses. Jika lolos validasi, file akan dibuka dan langsung ditutup kembali. File descriptor tidak disimpan karena pembacaan akan dilakukan dalam fungsi terpisah (`xmp_read()`).
+
+### 8.`Fungsi-fungsi lain`
+```
+static int xmp_write(const char *path, const char *buf, size_t size,
+                     off_t offset, struct fuse_file_info *fi) {
+  return -EACCES;
+}
+
+static int xmp_create(const char *path, mode_t mode,
+                      struct fuse_file_info *fi) {
+  return -EACCES;
+}
+
+static int xmp_unlink(const char *path) { return -EACCES; }
+
+static int xmp_mkdir(const char *path, mode_t mode) { return -EACCES; }
+
+static int xmp_rmdir(const char *path) { return -EACCES; }
+
+static int xmp_rename(const char *from, const char *to) { return -EACCES; }
+
+static int xmp_truncate(const char *path, off_t size) { return -EACCES; }
+
+static int xmp_utimens(const char *path, const struct timespec ts[2]) {
+  return -EACCES;
+}
+
+static int xmp_chmod(const char *path, mode_t mode) { return -EACCES; }
+
+static int xmp_chown(const char *path, uid_t uid, gid_t gid) { return -EACCES; }
+```
+Fungsi-fungsi lain seperti `xmp_write`, `xmp_create`, `xmp_unlink`, `xmp_mkdir`, `xmp_rmdir`, `xmp_rename`, `xmp_truncate`, `xmp_utimens`, `xmp_chmod`, dan `xmp_chown` semuanya dikonfigurasi untuk menolak akses. Hal ini dilakukan dengan mengembalikan nilai `-EACCES` secara langsung. Keputusan ini konsisten dengan tujuan dari sistem berkas ini yang bersifat `read-only`, di mana pengguna tidak diperbolehkan melakukan perubahan terhadap isi direktori maupun file yang berada dalam `source_path`.
+
+### 9.`fuse_operations xmp_oper`
+```
+static struct fuse_operations xmp_oper = {
+    .getattr = xmp_getattr,
+    .readdir = xmp_readdir,
+    .read = xmp_read,
+    .open = xmp_open,
+    .write = xmp_write,
+    .create = xmp_create,
+    .unlink = xmp_unlink,
+    .mkdir = xmp_mkdir,
+    .rmdir = xmp_rmdir,
+    .rename = xmp_rename,
+    .truncate = xmp_truncate,
+    .utimens = xmp_utimens,
+    .chmod = xmp_chmod,
+    .chown = xmp_chown,
+};
+```
+Struct `fuse_operations xmp_oper` berisi pemetaan antara operasi file system standar dengan fungsi-fungsi yang telah diimplementasikan. Misalnya, operasi `getattr` akan ditangani oleh `xmp_getattr`, `readdir oleh xmp_readdir`, dan `read` oleh `xmp_read`, sementara operasi lain seperti `write` diarahkan ke fungsi penolak akses. Dengan cara ini, FUSE tahu fungsi mana yang akan dipanggil ketika pengguna melakukan operasi tertentu terhadap file system.
+
+### 10.`main`
+```
+int main(int argc, char *argv[]) {
+  umask(0);
+
+  if (argc < 2) {
+    fprintf(stderr, "Usage: %s <mountpoint> [options]\n", argv[0]);
+    return 1;
+}
+
+
+  return fuse_main(argc, argv, &xmp_oper, NULL);
+}
+```
+Fungsi `main()` merupakan pintu masuk program. Di dalamnya, `umask(0)` digunakan untuk mengatur agar hak akses file tidak dibatasi oleh umask default sistem. Program kemudian memanggil `fuse_main()` dengan argumen `argc`, `argv`, struktur operasi `xmp_oper`, dan `NULL` sebagai private data. Fungsi `fuse_main()` akan mengambil alih proses dan menjalankan sistem file virtual sesuai dengan operasi yang telah didefinisikan.
+
 ---
