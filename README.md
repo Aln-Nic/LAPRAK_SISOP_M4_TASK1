@@ -20,11 +20,15 @@ Langkah pertama dalam rencana Yuadi adalah mempersiapkan infrastruktur dasar sis
 
 Yuadi dengan bijak merancang struktur ini: folder `public` untuk berbagi materi kuliah dan referensi yang boleh diakses siapa saja, sementara setiap orang memiliki folder private untuk menyimpan jawaban praktikum mereka masing-masing.
 
+![Image](https://github.com/user-attachments/assets/e675b4cc-dd6d-479e-b521-757fe5bcb879)
+
 ### b. Akses Mount Point
 
 Selanjutnya, Yuadi ingin memastikan sistem filenya mudah diakses namun tetap terkontrol.
 
 FUSE mount point Anda (contoh: `/mnt/secure_fs`) harus menampilkan konten dari `source directory` secara langsung. Jadi, jika Anda menjalankan `ls /mnt/secure_fs`, Anda akan melihat `public/`, `private_yuadi/`, dan `private_irwandi/`.
+
+![Image](https://github.com/user-attachments/assets/ded35cb1-deb8-4bd2-8cc6-f5acf80c4c77)
 
 ### c. Read-Only untuk Semua User
 
@@ -35,11 +39,15 @@ Yuadi sangat kesal dengan kebiasaan Irwandi yang suka mengubah atau bahkan mengh
 
 "Sekarang Irwandi tidak bisa lagi menghapus jejak plagiatnya atau mengubah file jawabanku," pikir Yuadi puas.
 
+![Image](https://github.com/user-attachments/assets/d06b12e6-fdfd-49be-9f90-66cb3ffa2453)
+
 ### d. Akses Public Folder
 
 Meski ingin melindungi jawaban praktikumnya, Yuadi tetap ingin berbagi materi kuliah dan referensi dengan Irwandi dan teman-teman lainnya.
 
 Setiap user (termasuk `yuadi`, `irwandi`, atau lainnya) harus dapat **membaca** konten dari file apapun di dalam folder `public`. Misalnya, `cat /mnt/secure_fs/public/materi_kuliah.txt` harus berfungsi untuk `yuadi` dan `irwandi`.
+
+![Image](https://github.com/user-attachments/assets/e390129a-b8be-480f-94f5-eddb24852c92)
 
 ### e. Akses Private Folder yang Terbatas
 
@@ -68,6 +76,8 @@ Setelah sistem selesai, beginilah cara kerja FUSecure dalam kehidupan akademik s
   - `mkdir /mnt/secure_fs/new_folder` (Gagal dengan "Permission denied" - sistem read-only)
 
 Dengan sistem ini, kedua mahasiswa akhirnya bisa belajar dengan tenang. Yuadi bisa menyimpan jawaban praktikumnya tanpa khawatir diplagiat Irwandi, sementara Irwandi terpaksa harus mengerjakan tugasnya sendiri namun masih bisa mengakses materi kuliah yang dibagikan Yuadi di folder public.
+
+![Image](https://github.com/user-attachments/assets/e390129a-b8be-480f-94f5-eddb24852c92)
 
 ## Catatan
 
